@@ -14,9 +14,13 @@ let pos6 = [ " _|"; " _\\|"; "   O" ]
 let pos7 = [ "\\__\\"; "/  /O" ]
 let pos8 = [ "  _O"; " _/|"; "  |" ]
 let slide = [ " O_"; " _\\" ]
+
+(* maybe add bow and arrow thingy or bomb throw *)
+
 let white_on_black = "\027[37;40m"
 let reset = "\027[0m"
 
+(* technically inverse frames per second or frame frequency, not actual fps *)
 (* decreases over time *)
 let fps = ref 0.051
 let input_flag = ref false
@@ -35,6 +39,7 @@ type input = {
 
 let input_data = { until_input = 0; move = STAND }
 
+(* let until_input = ref 0 *)
 (* make array with record containing info about obstacles so maybe in air *)
 type obstacle = {
   mutable loc : int;
@@ -94,15 +99,36 @@ let f16_string () =
     ^ String.make 7 '\n'
 
 let score = ref 0
-let max_obs = 10
+let high_score = ref 0
+
+let highscore_file = "highscore.txt"
+
+(* Read high score from file *)
+let load_highscore () =
+  try
+    let ic = open_in highscore_file in
+    let hs = int_of_string (input_line ic) in
+    close_in ic;
+    hs
+  with
+  | Sys_error _ -> 0
+  | Failure _ -> 0
+
+(* Save high score to file *)
+let save_highscore hs =
+  let oc = open_out highscore_file in
+  output_string oc (string_of_int hs);
+  output_char oc '\n';
+  close_out oc
+  let max_obs = 10
 let obstacles = Array.init max_obs (fun _ -> { loc = -8; height = 0 })
-let obs = ref 0
-let drop = 0
+let obs = ref 0 (* number of obstacles *)
+let drop = 0 (* had ((screen_w - plane_w) / 2) - 9 but idk so just this *)
 let boom = 24
 let place_low_obs = ref false
 let place_high_obs = ref false
 
-exception Petersen of string
+exception Clarkson of string
 
 let rec repeat s n = if n <= 0 then "" else s ^ repeat s (n - 1)
 
@@ -112,7 +138,7 @@ let boom_line num =
       if f16.pos > 17 - 5 + num then 7 + ((f16.pos - 18) * 4) else 0
     else if f16.pos < 32 then boom
     else if f16.pos < 40 - num then boom - ((f16.pos - 31) * 3)
-    else 0
+    else 0 (* is 0 at 39, is 21 at 32 *)
   else 0
 
 let line = function
@@ -142,6 +168,8 @@ let behind h =
     | _ -> String.make 3 ' '
   else String.make 3 ' '
 
+  (* maybe edit logic so 67 starts on nth character in line, and then add spaces
+   based on that and also loc of person, num 67s, etc. *)
 let move_obs () =
   for i = 0 to min !obs max_obs - 1 do
     obstacles.(i).loc <- obstacles.(i).loc - 1
@@ -156,11 +184,14 @@ let obs_string h =
   let obs_line = ref "" in
   for i = 0 to !obs - 1 do
     if obstacles.(i).height = h && obstacles.(i).loc > -2 then begin
+      (* find previous obstacle with height = 0 *)
       let prev = search (i - 1) h in
       let spaces =
         match prev with
         | None -> obstacles.(i).loc
         | Some j -> obstacles.(i).loc - obstacles.(j).loc - 2
+        (* was one but case for first ob.loc = 0 was wrong bc didnt move just
+           shifted*)
       in
       obs_line :=
         !obs_line
@@ -185,35 +216,45 @@ let join_lines lines =
   | [ l1; l2 ] -> l1 ^ "\n" ^ behind h ^ l2
   | _ -> invalid_arg "join_lines expects 2 or 3 strings"
 
+  (* specifically for standing position at the lowest height (h=0) *)
 let stand_high lines =
   match lines with
   | [ l1; l2; l3 ] ->
-      l1 ^ obs_string 2 ^ "\n" ^ "   " ^ l2 ^ "\n" ^ behind 0 ^ l3
+      l1 ^ obs_string 2 ^ "\n" ^ "   " ^ l2 ^ "\n" ^ behind 0 
+      ^ l3 (* ^ behind 0 before l3*)
   | _ -> invalid_arg "join_lines expects exactly 3 strings"
 
 let line_0 pos =
   if pos = slide then passed 2 ^ obs_string 2 ^ "\n" ^ "   " ^ join_lines pos
   else behind 2 ^ stand_high pos
 
+(* gives the line of bomb to go on the given line based on f16.pos and line
+   note: if pos = drop then line 8 has line 5, everything else has nothing *)
 let bomb_line line =
+  (* this is good*)
   let n = 12 - line + ((drop - f16.pos) / 2) in
+  (* - drop + f16.pos *)
+
   if n < 0 || n > 4 then "" else List.nth bomb n
 
 let end_obs len line s c =
   let b = bomb_line line in
   b
   ^
+  (* start >= len *)
   let start = c + String.length b in
   if start >= len then "" else String.sub s start (len - start)
 
 let join_bomb pos =
+  (* this needs work *)
   let h = line input_data.until_input in
   let base = if f16.pos - drop > 9 then drop + 25 else f16.pos + 15 in
+  (* 9 bc stops after not connected to plane *)
   match pos with
   | [ l1; l2; l3 ] ->
       behind (h + 2)
       ^ l1
-      ^ (if h = 0 then
+      ^ (if h = 0 then (* so h + 2 = 2 *)
            let x = obs_string 2 in
            if f16.pos - drop > 11 then
              let n = String.length x in
@@ -227,6 +268,8 @@ let join_bomb pos =
       ^ bomb_line (h + 1)
       ^ "\n" ^ behind h ^ l3
       ^
+      (* maybe match height with 0 or 2, and do this for 2, same thing but h=0
+         for 0, and else case otherwise *)
       if h = 2 then
         let x = obs_string 2 in
         if f16.pos - drop > 11 then
@@ -248,6 +291,7 @@ let join_bomb pos =
       (if h = 0 then
          passed 2
          ^
+         (* this is the slide case *)
          let x = obs_string 2 in
          if f16.pos - drop > 11 then
            let n = String.length x in
@@ -270,6 +314,9 @@ let join_bomb pos =
           let c = base - String.length l2 in
           (if n > c then String.sub x 0 c else x ^ String.make (c - n) ' ')
           ^ end_obs n 0 x c
+          (* let b = bomb_line 0 in b ^ if c + String.length b > n - 1 then ""
+             else String.sub x (c + String.length b) (n - 1) maybe, woud add to
+             others including for =2 *)
         else x
       else String.make (base - String.length l2) ' ' ^ bomb_line h ^ "\n"
   | _ -> invalid_arg "join_lines expects 2 or 3 strings"
@@ -277,7 +324,9 @@ let join_bomb pos =
 let bomb_string line pos =
   let diff = f16.pos - drop in
   let base = if diff > 9 then drop + 28 else f16.pos + 18 in
-  "\n"
+(* this needs a lot of work, basically im just going to brute force it and
+     throw in as much code as necessary to accomplish it *)
+       "\n"
   ^
   if line = 0 then
     (let x = ref "" in
@@ -285,14 +334,14 @@ let bomb_string line pos =
        x := !x ^ String.make base ' ' ^ bomb_line i ^ "\n"
      done;
      !x)
-    ^ if diff < 12 then line_0 pos ^ obs_string 0 else join_bomb pos
-  else if line = 2 then
+    ^ if diff < 12 then line_0 pos ^ obs_string 0 else join_bomb pos (* this case is specific *)
+  else if line = 2 then (* line is not 0 *)
     (let x = ref "" in
      for i = 8 downto 2 + List.length pos do
        x := !x ^ String.make base ' ' ^ bomb_line i ^ "\n"
      done;
      !x)
-    ^ join_bomb pos
+    ^ join_bomb pos (* covers the whole obstacle thing for this case *)
     ^
     let c = drop + 22 in
     if diff > 11 then
@@ -303,9 +352,10 @@ let bomb_string line pos =
       (if m > c then String.sub y 0 c else y ^ String.make (c - m) ' ')
       ^ end_obs m 0 y c
     else "\n\n" ^ passed 0 ^ obs_string 0
-  else
+  else (* line > 2 *)
     let x = ref "" in
     for i = 8 downto line + 3 do
+      (* was list.length pos but then does twice bc join_bomb also does it *)
       x := !x ^ String.make base ' ' ^ bomb_line i ^ "\n"
     done;
     !x ^ join_bomb pos
@@ -332,14 +382,21 @@ let bomb_string line pos =
     else z ^ "\n\n" ^ passed 0 ^ obs_string 0
 
 let join_boom lines =
+  (* lines = pos *)
   let h = line input_data.until_input in
   let bond s line =
     let num = boom_line line in
-    let base = 28 - num - String.length s in
+    let base = 28 - num - String.length s+1 in
     behind line ^ s
     ^ (if base > 0 then String.make base ' ' else "")
     ^ repeat "67" num
     ^ if line > 0 then "\n" else ""
+    (* do NOT comment out the above line*)
+
+    (* let x = obs_string 2 in let n = String.length x in (if n > base then
+       String.sub x 0 base else x ^ String.make (base - n) ' ') ^ repeat s num ^
+       let start = base + num in if start >= n then "" else String.sub s start
+       (n - start) *)
   in
   match lines with
   | [ l1; l2; l3 ] -> bond l1 (h + 2) ^ bond l2 (h + 1) ^ bond l3 h
@@ -352,37 +409,49 @@ let explosion line pos =
   let x = ref "" in
   for i = 8 downto line + 3 do
     let n = boom_line i in
-    x := !x ^ String.make (31 - n) ' ' ^ repeat "67" n ^ "\n"
+    x := !x ^ String.make (31 - n + 1) ' ' ^ repeat "67" n ^ "\n"
   done;
   !x ^ join_boom pos
   ^
   let y = ref "" in
   for i = line - 1 downto 0 do
     let n = boom_line i in
-    y := !y ^ String.make (31 - n) ' ' ^ repeat "67" n ^ "\n"
+    y := !y ^ String.make (31 - n + 1) ' ' ^ repeat "67" n ^ (if i > 0 then "\n" else "")
   done;
-  !y
+  !y (*("\n" ^ String.make 20 ' ' ^ String.make 5 "67")*)
 
 let output line pos =
   let third_line = if pos = pos3 || pos = pos7 || pos = slide then 1 else 0 in
   let no_high = search 9 2 = None in
-  String.make 20 '\n' ^ "Score: " ^ string_of_int !score ^ f16_string ()
+  (* no high obstacles *)
+  String.make 20 '\n' ^ "Score: " ^ string_of_int !score ^ String.make 4 '\t' ^ "High Score: " ^ string_of_int !high_score
+  (*^ "\t\t\t High Score: 0"*) ^ f16_string ()
   ^
-  if f16.pos >= drop && f16.pos < drop + 18 then bomb_string line pos
+  if f16.pos >= drop && f16.pos < drop + 18 then bomb_string line pos (* bomb *)
   else if f16.pos >= drop + 18 && f16.pos < 40 then explosion line pos
   else if no_high || line >= 2 then
     (if pos = slide then
        String.make (7 - line) '\n' ^ passed 2 ^ obs_string 2 ^ "\n"
      else String.make (7 - line + third_line) '\n')
     ^ behind (line + List.length pos - 1)
-    ^ join_lines pos
+      (* idk was 3 spaces; if slide and line = 0 tho then wrong*)    
+        ^ join_lines pos
     ^ (if no_high && line < 2 then String.make line '\n'
+      (* this does nothing bc line=0, valid bc no_high *)
+       (* no bc passed 2 must be called also line could still bve greater than
+            2 here *)
        else
          String.make (line - 2) '\n'
-         ^ (if line = 2 then "" else passed 2)
+         ^ (if line = 2 then "" 
+          else passed 2 (* compact so no_high condition is here or smth *))
          ^ obs_string 2 ^ String.make 2 '\n')
     ^ if line = 0 then "" else passed 0
-  else String.make 7 '\n' ^ line_0 pos
+  else (* line=0 bc its never 1; ppos is either pos1 (stand) or slide *)
+    (* String.make (10 - line + third_line) '\n' *)
+    String.make 7 '\n' ^ line_0 pos
+(* 1st string of pos then string of rest *)
+(* basically add n to output func, if n≥2 then just add obstacles at h=2, else
+   do string by string from pos *)
 
 let jump n =
   let line = line n in
@@ -416,6 +485,12 @@ let frontflip n =
     | 1 -> pos2
     | _ -> pos1)
 
+    (* must have the three spaces normal plus 3 for missing bob *)
+(* also save high score for user at some point *)
+(* needs logic for spaces (also note that username length matters; maybe only 
+1st 3 chars, or have actual character in ascii). Basically when person is jumping
+the 67 should be in the next spot as normal, and the 67 goes all the way to the 
+back, and it's not just equals bc there is a range for the character *)
 let wait_for_quiet () =
   let rec loop () =
     let ready, _, _ = Unix.select [ Unix.stdin ] [] [] 0.0 in
@@ -445,8 +520,11 @@ let rec print_loop controller_oc =
     (fun () ->
       let had_input = !input_flag in
       input_flag := false;
-
-      if !fps > 0.03 && !score mod 100 = 0 then fps := !fps -. 0.001 else ();
+      (* also add 67s on above line(s) note: if lines plural (eg. on line 1), add limbo position?*)
+      (* use array to store 67 loc vals bc there's a max amount there can be anyway *)
+      (* (!obs = 0 || obstacles.(!obs) = init_distance-10) *)
+      (*original: if !fps > 0.03 && !score mod 100 = 0 then fps := !fps -. 0.001 else ()*)
+      if !fps > 0.01 && !score mod 100 = 0 then fps := 1.0 /. ((1.0 /. !fps) +. 1.0) else ();
       if f16.pos = 18 then (
         obs := 0;
         for i = 0 to max_obs - 1 do
@@ -461,12 +539,13 @@ let rec print_loop controller_oc =
         done)
       else move_obs ();
       let new_67 =
-        f16.pos < 22
+        f16.pos < 18 (* if I ever do logic so obstacles only disappear when the bomb reaches them, change to 22*)
         && ((!obs = 0 && float_of_int (!score + 50) *. !fps > 4.5)
            || !obs > 0
               && obstacles.(!obs - 1).loc < init_distance - 13
               && Random.int 10 = 1)
       in
+      (* OG if new_67 then*) 
       if !place_low_obs && !obs < max_obs then (
         obstacles.(!obs) <- { loc = init_distance - 1; height = 0 };
         obs := !obs + 1;
@@ -485,6 +564,7 @@ let rec print_loop controller_oc =
           | _ -> 0
         in
         obstacles.(!obs) <- { loc = init_distance - 1; height = level };
+        (* information for new obstacle *)
         obs := !obs + 1)
       else ();
       score := !score + 1;
@@ -496,6 +576,7 @@ let rec print_loop controller_oc =
         else f16.pos <- f16.pos + 1
       else f16.charge <- f16.charge + 1;
       let led_signal =
+        (* im pretty sure this didn't work but idk *)
         match controller_oc with
         | Some oc ->
           (* this code doesn't actually work but thats ok *)
@@ -518,6 +599,8 @@ let rec print_loop controller_oc =
       else if not had_input then
         input_data.until_input <- input_data.until_input - 1
       else input_data.until_input <- 7;
+      (* add ^ reset for making black? use if score mult of 500 then switch or
+         smth *)
       let output =
         (if !score mod 1000 > 500 then white_on_black else "") ^ msg ^ reset
       in
@@ -535,18 +618,28 @@ let rec print_loop controller_oc =
         obstacles.(0).loc = 0
         && ((obstacles.(0).height = 0 && input_data.until_input = 0)
            || (obstacles.(0).height = 2 && hit_high))
-      then raise (Petersen "Petersen is coming for you");
+      then begin
+        (* edit so based on object height and character height *)
+        if !high_score < !score then begin
+          high_score := !score;
+          save_highscore !high_score
+        end;
+        raise (Clarkson "Clarkson is coming for you")
+      end;
       print_loop controller_oc)
     (function
-      | Petersen msg ->
+      | Clarkson msg ->
           Lwt_unix.sleep 1.8 >>= fun () ->
           restore_terminal ();
           print_endline msg;
-          let%lwt () = Lwt_unix.sleep 1.8 in
-          Lwt.return_unit
+          Lwt_unix.sleep 1.8 >>= fun () -> Lwt.return_unit
+          (* OR
+          let%lwt () = Lwt_unix.sleep 2.0 in
+          Lwt.return_unit *)
       | e ->
           restore_terminal ();
           Lwt.fail e)
+          (* was raise e*)
 
 (* --- Input loop with cooldown + raw single-character reads --- *)
 
@@ -718,6 +811,7 @@ let choose_device devices prompt =
 let run_dino () : unit Lwt.t =
   reset_game ();
   enable_raw_mode ();
+  high_score := load_highscore ();
   let devices = find_serial_devices () in
   let player_device = choose_device devices "Player: choose a board (or use keyboard controls)" in
   let controller_device = choose_device devices "Controller: choose a board (or have random obstacles)" in
